@@ -33,7 +33,7 @@ def inner_radii_from_lumen_mask(
         )
         positive = radial >= -1e-9
         rpos = radial[positive]
-        values = strip[:, positive] > 0.5
+        values = strip[positive, :].T > 0.5
         for i, row in enumerate(values):
             if not row[0]:
                 hits = np.flatnonzero(row)
