@@ -5,14 +5,17 @@ from pathlib import Path
 from typing import Literal
 
 import numpy as np
+import SimpleITK as sitk
 
 
 @dataclass(slots=True)
 class VolumeData:
     path: Path
-    data: np.ndarray
-    affine: np.ndarray
+    image: sitk.Image
     shape: tuple[int, int, int]
+    spacing_mm: tuple[float, float, float]
+    origin_mm: tuple[float, float, float]
+    direction: tuple[float, ...]
 
 
 @dataclass(slots=True)
@@ -43,7 +46,7 @@ class CoronaryGraph:
 class SpatialQA:
     passed: bool
     same_shape: bool
-    affine_max_abs_diff_mm: float
+    geometry_max_abs_diff_mm: float
     centerline_inside_volume_fraction: float
     centerline_inside_lumen_fraction: float
     median_centerline_to_lumen_mm: float
@@ -68,6 +71,7 @@ class PatientCase:
     lumen_mask: VolumeData
     graph: CoronaryGraph
     qa: SpatialQA
+    case_dir: Path
 
 
 @dataclass(slots=True)
@@ -98,3 +102,5 @@ class PreparedPath:
     surface: WallSurface
     cross_section_size_mm: float
     cross_section_spacing_mm: float
+    longitudinal_radial_extent_mm: float = 5.0
+    longitudinal_radial_spacing_mm: float = 0.10
