@@ -87,7 +87,10 @@ def generate_longitudinal_reformation(image: sitk.Image, frames: ParallelTranspo
     target = frames.centerline_xyz_mm[:,None,:] + radial[None,:,None]*direction[:,None,:]
 
     ref = sitk.Image([ns, nr, 1], sitk.sitkFloat32)
-    ref.SetSpacing([ds, radial_spacing_mm, 1.0]); ref.SetOrigin([0.0, -radial_extent_mm, 0.0]); ref.SetDirection(np.eye(3).ravel().tolist())
+    ref.SetSpacing([ds, radial_spacing_mm, 1.0])
+    ref.SetOrigin([0.0, -radial_extent_mm, 0.0])
+    ref.SetDirection(np.eye(3).ravel().tolist())
+
     out_phys = np.zeros_like(target)
     out_phys[...,0] = frames.arc_length_mm[:,None]
     out_phys[...,1] = radial[None,:]
@@ -98,5 +101,5 @@ def generate_longitudinal_reformation(image: sitk.Image, frames: ParallelTranspo
     transform = sitk.DisplacementFieldTransform(field)
     interp = sitk.sitkNearestNeighbor if nearest else sitk.sitkLinear
     resampled = sitk.Resample(image, ref, transform, interp, 0.0, sitk.sitkFloat32)
-    array = sitk.GetArrayViewFromImage(resampled)[0].copy().T
+    array = sitk.GetArrayViewFromImage(resampled)[0].copy()
     return array, radial
