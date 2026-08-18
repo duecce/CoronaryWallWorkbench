@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Literal
+import re
 import shutil
 
 import numpy as np
@@ -62,13 +63,27 @@ def _save_upload(upload: UploadFile, path: Path) -> None:
     with path.open("wb") as f: shutil.copyfileobj(upload.file, f)
 
 
+def _safe_case_id(value: str) -> str:
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "_", value.strip())
+    if not safe or safe in {".", ".."}:
+        raise HTTPException(400, "Invalid case ID")
+    return safe
+
+
+def _safe_filename(filename: str | None, fallback: str) -> str:
+    return Path(filename or fallback).name
+
+
 @app.get("/health")
 def health(): return {"status":"ok"}
 
 @app.post("/api/cases/upload")
 def upload_case(case_id: str=Form(...), require_alignment: bool=Form(True), ccta: UploadFile=File(...), lumen_mask: UploadFile=File(...), coronary_xml: UploadFile=File(...)) -> dict:
+    case_id = _safe_case_id(case_id)
     case_dir=DATA_ROOT/case_id; case_dir.mkdir(parents=True, exist_ok=True)
-    ccta_p=case_dir/(ccta.filename or "ccta.nii.gz"); lumen_p=case_dir/(lumen_mask.filename or "lumen.nii.gz"); xml_p=case_dir/(coronary_xml.filename or "coronary.xml")
+    ccta_p=case_dir/_safe_filename(ccta.filename,"ccta.nii.gz")
+    lumen_p=case_dir/_safe_filename(lumen_mask.filename,"lumen.nii.gz")
+    xml_p=case_dir/_safe_filename(coronary_xml.filename,"coronary.xml")
     _save_upload(ccta,ccta_p); _save_upload(lumen_mask,lumen_p); _save_upload(coronary_xml,xml_p)
     try: loaded=registry.load_case(case_id=case_id,ccta_path=str(ccta_p),lumen_mask_path=str(lumen_p),xml_path=str(xml_p),require_alignment=require_alignment,case_dir=str(case_dir/"annotations"))
     except Exception as exc: raise HTTPException(400,str(exc)) from exc
