@@ -1,215 +1,47 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "./styles.css";
 
-type WallName = "inner" | "outer";
-type Point = [number, number];
+type WallName="inner"|"outer"; type Point=[number,number];
+type PathInfo={path_id:string;coronary_name:string;length_mm:number;labels:string[]};
+type Wall={radii_mm:number[];control_points_mm:Point[];contour_mm:Point[];anchors:boolean[];editable:boolean};
+type Section={s_index:number;s_mm:number;sample_count:number;active_wall:WallName;theta_rad:number[];inner:Wall;outer:Wall;image_hu:number[][];size_mm:number;spacing_mm:number};
+type Profile={positive_mm:number[];negative_mm:number[];positive_anchors:boolean[];negative_anchors:boolean[];opposite_theta_index:number};
+type Longitudinal={theta_index:number;theta_rad:number;s_mm:number[];radial_mm:number[];image_hu:number[][];active_wall:WallName;inner:Profile;outer:Profile};
+const API="http://127.0.0.1:8000";
 
-type WallPayload = {
-  radii_mm: number[];
-  control_points_mm: Point[];
-  contour_mm: Point[];
-  anchors: boolean[];
-  editable: boolean;
-};
+function gray(hu:number){return Math.max(0,Math.min(255,((hu+200)/1000)*255));}
+function drawImage(ctx:CanvasRenderingContext2D,data:number[][],w:number,h:number){const im=ctx.createImageData(w,h);const sy=data.length/w?data.length/h:1;const H=data.length,W=data[0]?.length||1;for(let y=0;y<h;y++)for(let x=0;x<w;x++){const v=gray(data[Math.min(H-1,Math.floor(y*H/h))]?.[Math.min(W-1,Math.floor(x*W/w))]??-1000);const k=4*(y*w+x);im.data[k]=im.data[k+1]=im.data[k+2]=v;im.data[k+3]=255;}ctx.putImageData(im,0,0);}
 
-type SectionPayload = {
-  s_index: number;
-  s_mm: number;
-  active_wall: WallName;
-  theta_rad: number[];
-  inner: WallPayload;
-  outer: WallPayload;
-  image_hu: number[][];
-  lumen_mask: number[][];
-  size_mm: number;
-  spacing_mm: number;
-};
-
-const API = "http://127.0.0.1:8000";
-
-function mmToCanvas(p: Point, sizeMm: number, width: number): Point {
-  return [width / 2 + (p[0] / sizeMm) * width, width / 2 + (p[1] / sizeMm) * width];
+function CrossCanvas({data,onEdit}:{data:Section;onEdit:(theta:number,delta:number)=>void}){
+ const ref=useRef<HTMLCanvasElement>(null);const [drag,setDrag]=useState<number|null>(null);const W=560;const active=data[data.active_wall];
+ const toPx=(p:Point):Point=>[W/2+p[0]/data.size_mm*W,W/2+p[1]/data.size_mm*W];
+ useEffect(()=>{const c=ref.current,ctx=c?.getContext("2d");if(!ctx||!c)return;drawImage(ctx,data.image_hu,W,W);const contour=(pts:Point[],color:string,lw:number)=>{if(!pts.length)return;ctx.beginPath();let q=toPx(pts[0]);ctx.moveTo(...q);pts.slice(1).forEach(p=>{q=toPx(p);ctx.lineTo(...q)});ctx.closePath();ctx.strokeStyle=color;ctx.lineWidth=lw;ctx.stroke()};contour(data.outer.contour_mm,data.active_wall==="outer"?"#ffb020":"#7b653c",data.active_wall==="outer"?3:1.5);contour(data.inner.contour_mm,data.active_wall==="inner"?"#4dc7ff":"#3d6273",data.active_wall==="inner"?3:1.5);active.control_points_mm.forEach((p,i)=>{const q=toPx(p);ctx.beginPath();ctx.arc(q[0],q[1],active.anchors[i]?6:4,0,Math.PI*2);ctx.fillStyle=data.active_wall==="inner"?"#4dc7ff":"#ffb020";ctx.fill()})},[data]);
+ const pos=(e:React.PointerEvent<HTMLCanvasElement>):Point=>{const r=e.currentTarget.getBoundingClientRect();return[(e.clientX-r.left)*W/r.width,(e.clientY-r.top)*W/r.height]};
+ const down=(e:React.PointerEvent<HTMLCanvasElement>)=>{const p=pos(e);let best:null|number=null,d=15;active.control_points_mm.forEach((n,i)=>{const q=toPx(n),dd=Math.hypot(q[0]-p[0],q[1]-p[1]);if(dd<d){d=dd;best=i}});if(best!==null){setDrag(best);e.currentTarget.setPointerCapture(e.pointerId)}};
+ const up=(e:React.PointerEvent<HTMLCanvasElement>)=>{if(drag===null)return;const p=pos(e),nr=Math.hypot(p[0]-W/2,p[1]-W/2)/W*data.size_mm;onEdit(drag,nr-active.radii_mm[drag]);setDrag(null)};
+ return <canvas className="crossCanvas" ref={ref} width={W} height={W} onPointerDown={down} onPointerUp={up}/>;
 }
 
-function AnnotationCanvas({ data, caseId, pathId, onChanged }: { data: SectionPayload; caseId: string; pathId: string; onChanged: (p: SectionPayload) => void }) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [dragNode, setDragNode] = useState<number | null>(null);
-  const width = 640;
-
-  const active = data[data.active_wall];
-
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    const h = data.image_hu.length;
-    const w = data.image_hu[0]?.length ?? 0;
-    const pixels = ctx.createImageData(width, width);
-    for (let y = 0; y < width; y++) {
-      for (let x = 0; x < width; x++) {
-        const iy = Math.min(h - 1, Math.floor((y / width) * h));
-        const ix = Math.min(w - 1, Math.floor((x / width) * w));
-        const hu = data.image_hu[iy]?.[ix] ?? -1000;
-        const value = Math.max(0, Math.min(255, ((hu + 200) / 1000) * 255));
-        const idx = (y * width + x) * 4;
-        pixels.data[idx] = value;
-        pixels.data[idx + 1] = value;
-        pixels.data[idx + 2] = value;
-        pixels.data[idx + 3] = 255;
-      }
-    }
-    ctx.putImageData(pixels, 0, 0);
-
-    const drawContour = (points: Point[], stroke: string, lineWidth: number) => {
-      if (!points.length) return;
-      ctx.beginPath();
-      const p0 = mmToCanvas(points[0], data.size_mm, width);
-      ctx.moveTo(p0[0], p0[1]);
-      for (const p of points.slice(1)) {
-        const q = mmToCanvas(p, data.size_mm, width);
-        ctx.lineTo(q[0], q[1]);
-      }
-      ctx.closePath();
-      ctx.strokeStyle = stroke;
-      ctx.lineWidth = lineWidth;
-      ctx.stroke();
-    };
-
-    drawContour(data.outer.contour_mm, data.active_wall === "outer" ? "#ffb020" : "#876f3f", data.active_wall === "outer" ? 3 : 1.5);
-    drawContour(data.inner.contour_mm, data.active_wall === "inner" ? "#4dc7ff" : "#456878", data.active_wall === "inner" ? 3 : 1.5);
-
-    for (const [idx, p] of active.control_points_mm.entries()) {
-      const q = mmToCanvas(p, data.size_mm, width);
-      ctx.beginPath();
-      ctx.arc(q[0], q[1], active.anchors[idx] ? 6 : 4, 0, Math.PI * 2);
-      ctx.fillStyle = data.active_wall === "inner" ? "#4dc7ff" : "#ffb020";
-      ctx.fill();
-      if (active.anchors[idx]) {
-        ctx.strokeStyle = "white";
-        ctx.lineWidth = 1;
-        ctx.stroke();
-      }
-    }
-  }, [data, active]);
-
-  const closestNode = (x: number, y: number): number | null => {
-    let best: number | null = null;
-    let bestD = 14;
-    active.control_points_mm.forEach((p, i) => {
-      const q = mmToCanvas(p, data.size_mm, width);
-      const d = Math.hypot(q[0] - x, q[1] - y);
-      if (d < bestD) { best = i; bestD = d; }
-    });
-    return best;
-  };
-
-  const pointer = (e: React.PointerEvent<HTMLCanvasElement>): Point => {
-    const r = e.currentTarget.getBoundingClientRect();
-    return [(e.clientX - r.left) * width / r.width, (e.clientY - r.top) * width / r.height];
-  };
-
-  const onPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    const [x, y] = pointer(e);
-    const node = closestNode(x, y);
-    if (node !== null) {
-      setDragNode(node);
-      e.currentTarget.setPointerCapture(e.pointerId);
-    }
-  };
-
-  const onPointerUp = async (e: React.PointerEvent<HTMLCanvasElement>) => {
-    if (dragNode === null) return;
-    const [x, y] = pointer(e);
-    const center = width / 2;
-    const newRadiusPx = Math.hypot(x - center, y - center);
-    const newRadiusMm = (newRadiusPx / width) * data.size_mm;
-    const oldRadiusMm = active.radii_mm[dragNode];
-    const response = await fetch(`${API}/api/cases/${caseId}/paths/${pathId}/edit`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        wall: data.active_wall,
-        s_index: data.s_index,
-        theta_index: dragNode,
-        delta_radius_mm: newRadiusMm - oldRadiusMm,
-        sigma_s_mm: 1.5,
-        sigma_theta_nodes: 1.25,
-        make_anchor: true,
-      }),
-    });
-    if (response.ok) onChanged(await response.json());
-    setDragNode(null);
-  };
-
-  return <canvas ref={canvasRef} width={width} height={width} onPointerDown={onPointerDown} onPointerUp={onPointerUp} />;
+function LongCanvas({data,sIndex,onNavigate,onEdit}:{data:Longitudinal;sIndex:number;onNavigate:(i:number)=>void;onEdit:(s:number,theta:number,delta:number)=>void}){
+ const ref=useRef<HTMLCanvasElement>(null);const drag=useRef<{s:number;side:"positive"|"negative"}|null>(null);const W=850,H=420;const active=data[data.active_wall];const rmin=data.radial_mm[0],rmax=data.radial_mm[data.radial_mm.length-1];
+ const x=(i:number)=>i/(data.s_mm.length-1)*W;const y=(r:number)=>H-(r-rmin)/(rmax-rmin)*H;
+ useEffect(()=>{const c=ref.current,ctx=c?.getContext("2d");if(!ctx||!c)return;drawImage(ctx,data.image_hu,W,H);const curve=(vals:number[],color:string,lw:number)=>{ctx.beginPath();vals.forEach((r,i)=>i?ctx.lineTo(x(i),y(r)):ctx.moveTo(x(i),y(r)));ctx.strokeStyle=color;ctx.lineWidth=lw;ctx.stroke()};curve(data.outer.positive_mm,"#ffb020",data.active_wall==="outer"?3:1.4);curve(data.outer.negative_mm,"#ffb020",data.active_wall==="outer"?3:1.4);curve(data.inner.positive_mm,"#4dc7ff",data.active_wall==="inner"?3:1.4);curve(data.inner.negative_mm,"#4dc7ff",data.active_wall==="inner"?3:1.4);ctx.strokeStyle="#fff";ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(x(sIndex),0);ctx.lineTo(x(sIndex),H);ctx.stroke();active.positive_mm.forEach((r,i)=>{if(active.positive_anchors[i]){ctx.beginPath();ctx.arc(x(i),y(r),3,0,Math.PI*2);ctx.fillStyle="#fff";ctx.fill()}});active.negative_mm.forEach((r,i)=>{if(active.negative_anchors[i]){ctx.beginPath();ctx.arc(x(i),y(r),3,0,Math.PI*2);ctx.fillStyle="#fff";ctx.fill()}})},[data,sIndex]);
+ const pt=(e:React.PointerEvent<HTMLCanvasElement>)=>{const b=e.currentTarget.getBoundingClientRect();return[(e.clientX-b.left)*W/b.width,(e.clientY-b.top)*H/b.height] as Point};
+ const down=(e:React.PointerEvent<HTMLCanvasElement>)=>{const [px,py]=pt(e);const si=Math.max(0,Math.min(data.s_mm.length-1,Math.round(px/W*(data.s_mm.length-1))));const rp=active.positive_mm[si],rn=active.negative_mm[si];const dp=Math.abs(py-y(rp)),dn=Math.abs(py-y(rn));if(Math.min(dp,dn)<16){drag.current={s:si,side:dp<dn?"positive":"negative"};e.currentTarget.setPointerCapture(e.pointerId)}else onNavigate(si)};
+ const up=(e:React.PointerEvent<HTMLCanvasElement>)=>{if(!drag.current)return;const [,py]=pt(e);const newR=rmin+(H-py)/H*(rmax-rmin);const {s,side}=drag.current;const theta=side==="positive"?data.theta_index:active.opposite_theta_index;const old=side==="positive"?active.positive_mm[s]:-active.negative_mm[s];const target=side==="positive"?newR:-newR;onEdit(s,theta,target-old);drag.current=null};
+ return <canvas className="longCanvas" ref={ref} width={W} height={H} onPointerDown={down} onPointerUp={up}/>;
 }
 
-function App() {
-  const params = useMemo(() => new URLSearchParams(window.location.search), []);
-  const [caseId, setCaseId] = useState(params.get("case") ?? "");
-  const [pathId, setPathId] = useState(params.get("path") ?? "");
-  const [sIndex, setSIndex] = useState(Number(params.get("s") ?? 0));
-  const [section, setSection] = useState<SectionPayload | null>(null);
-  const [error, setError] = useState("");
-
-  const loadSection = async (index = sIndex) => {
-    if (!caseId || !pathId) return;
-    const r = await fetch(`${API}/api/cases/${caseId}/paths/${pathId}/sections/${index}`);
-    if (!r.ok) { setError(await r.text()); return; }
-    setError("");
-    setSection(await r.json());
-  };
-
-  const chooseWall = async (wall: WallName) => {
-    const r = await fetch(`${API}/api/cases/${caseId}/paths/${pathId}/active-wall`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ wall }),
-    });
-    if (r.ok) await loadSection();
-  };
-
-  return <main>
-    <header>
-      <div>
-        <h1>CoronaryWallWorkbench</h1>
-        <p>Cross-sectional assisted wall editor</p>
-      </div>
-      {section && <div className="wall-switch">
-        <button className={section.active_wall === "inner" ? "active inner" : ""} onClick={() => chooseWall("inner")}>Edit inner wall</button>
-        <button className={section.active_wall === "outer" ? "active outer" : ""} onClick={() => chooseWall("outer")}>Edit outer wall</button>
-      </div>}
-    </header>
-
-    <section className="toolbar">
-      <label>Case <input value={caseId} onChange={e => setCaseId(e.target.value)} /></label>
-      <label>Path <input value={pathId} onChange={e => setPathId(e.target.value)} /></label>
-      <label>Section <input type="number" min="0" value={sIndex} onChange={e => setSIndex(Number(e.target.value))} /></label>
-      <button onClick={() => loadSection()}>Load section</button>
-    </section>
-
-    {error && <pre className="error">{error}</pre>}
-    {section && <section className="workspace">
-      <div className="viewer">
-        <AnnotationCanvas data={section} caseId={caseId} pathId={pathId} onChanged={(p) => setSection({ ...section, ...p })} />
-      </div>
-      <aside>
-        <h2>{section.active_wall === "inner" ? "Inner wall" : "Outer wall"}</h2>
-        <p>Only the selected wall exposes editable control nodes. The inactive wall remains visible as a reference contour.</p>
-        <dl>
-          <dt>Position</dt><dd>{section.s_mm.toFixed(2)} mm</dd>
-          <dt>Control nodes</dt><dd>{section.theta_rad.length}</dd>
-          <dt>Spacing</dt><dd>{section.spacing_mm.toFixed(2)} mm</dd>
-        </dl>
-        <div className="nav">
-          <button disabled={sIndex <= 0} onClick={() => { const n = Math.max(0, sIndex - 1); setSIndex(n); loadSection(n); }}>Previous</button>
-          <button onClick={() => { const n = sIndex + 1; setSIndex(n); loadSection(n); }}>Next</button>
-        </div>
-      </aside>
-    </section>}
-  </main>;
-}
-
-createRoot(document.getElementById("root")!).render(<React.StrictMode><App /></React.StrictMode>);
+function App(){
+ const [caseId,setCaseId]=useState("case001"),[files,setFiles]=useState<{ccta?:File;lumen?:File;xml?:File}>({});const [paths,setPaths]=useState<PathInfo[]>([]),[pathId,setPathId]=useState("");const [section,setSection]=useState<Section|null>(null),[long,setLong]=useState<Longitudinal|null>(null),[sIndex,setSIndex]=useState(0),[theta,setTheta]=useState(0),[status,setStatus]=useState("Load a case to begin");
+ const refresh=async(si=sIndex,ti=theta)=>{if(!pathId)return;const [a,b]=await Promise.all([fetch(`${API}/api/cases/${caseId}/paths/${pathId}/sections/${si}`),fetch(`${API}/api/cases/${caseId}/paths/${pathId}/longitudinal/${ti}`)]);if(!a.ok||!b.ok){setStatus(await (!a.ok?a:b).text());return}setSection(await a.json());setLong(await b.json());setSIndex(si);setTheta(ti)};
+ const upload=async()=>{if(!files.ccta||!files.lumen||!files.xml)return setStatus("Select CCTA, lumen mask and XML");const f=new FormData();f.append("case_id",caseId);f.append("require_alignment","true");f.append("ccta",files.ccta);f.append("lumen_mask",files.lumen);f.append("coronary_xml",files.xml);setStatus("Loading case and running spatial QA...");const r=await fetch(`${API}/api/cases/upload`,{method:"POST",body:f});if(!r.ok)return setStatus(await r.text());const d=await r.json();setPaths(d.paths);setPathId(d.paths[0]?.path_id||"");setStatus(d.qa.passed?"Spatial QA passed":"Loaded with QA warnings")};
+ const prepare=async()=>{if(!pathId)return;setStatus("Preparing centerline frames and wall initialization...");const r=await fetch(`${API}/api/cases/${caseId}/paths/${pathId}/prepare`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({centerline_step_mm:.5,cross_section_size_mm:10,cross_section_spacing_mm:.1,n_theta:16,outer_offset_mm:.75,longitudinal_radial_extent_mm:5,longitudinal_radial_spacing_mm:.1})});if(!r.ok)return setStatus(await r.text());setSIndex(0);setTheta(0);await refresh(0,0);setStatus("Ready — edits are autosaved")};
+ const chooseWall=async(w:WallName)=>{await fetch(`${API}/api/cases/${caseId}/paths/${pathId}/active-wall`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({wall:w})});await refresh()};
+ const edit=async(si:number,ti:number,delta:number)=>{const w=section?.active_wall||"outer";const r=await fetch(`${API}/api/cases/${caseId}/paths/${pathId}/edit`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({wall:w,s_index:si,theta_index:ti,delta_radius_mm:delta,sigma_s_mm:1.5,sigma_theta_nodes:1.25,make_anchor:true})});if(!r.ok)return setStatus(await r.text());await refresh(si,theta);setStatus("Saved")};
+ return <main><header><div><h1>CoronaryWallWorkbench</h1><p>Assisted inner/outer wall annotation</p></div>{section&&<div className="wall-switch"><button className={section.active_wall==="inner"?"active inner":""} onClick={()=>chooseWall("inner")}>Edit inner wall</button><button className={section.active_wall==="outer"?"active outer":""} onClick={()=>chooseWall("outer")}>Edit outer wall</button></div>}</header>
+ <section className="loader"><input value={caseId} onChange={e=>setCaseId(e.target.value)} placeholder="Case ID"/><label>CCTA<input type="file" accept=".nii,.gz" onChange={e=>setFiles({...files,ccta:e.target.files?.[0]})}/></label><label>Lumen<input type="file" accept=".nii,.gz" onChange={e=>setFiles({...files,lumen:e.target.files?.[0]})}/></label><label>XML<input type="file" accept=".xml" onChange={e=>setFiles({...files,xml:e.target.files?.[0]})}/></label><button onClick={upload}>Load case</button>{paths.length>0&&<><select value={pathId} onChange={e=>setPathId(e.target.value)}>{paths.map(p=><option key={p.path_id} value={p.path_id}>{p.coronary_name} — {p.labels.join(" / ")||p.path_id} ({p.length_mm.toFixed(1)} mm)</option>)}</select><button onClick={prepare}>Prepare path</button></>}<span className="status">{status}</span></section>
+ {section&&long&&<><section className="toolbar"><label>Section <input type="range" min="0" max={section.sample_count-1} value={sIndex} onChange={e=>refresh(Number(e.target.value),theta)}/><b>{section.s_mm.toFixed(1)} mm</b></label><label>Longitudinal angle <select value={theta} onChange={e=>refresh(sIndex,Number(e.target.value))}>{section.theta_rad.map((t,i)=><option key={i} value={i}>{(t*180/Math.PI).toFixed(0)}°</option>)}</select></label></section><section className="workspace"><div className="panel"><h2>Cross-section</h2><CrossCanvas data={section} onEdit={(ti,d)=>edit(sIndex,ti,d)}/></div><div className="panel longitudinal"><h2>Longitudinal view</h2><LongCanvas data={long} sIndex={sIndex} onNavigate={i=>refresh(i,theta)} onEdit={edit}/><p>Click the image to move the cross-section. Drag the active wall to correct it longitudinally.</p></div></section></>}
+ </main>}
+createRoot(document.getElementById("root")!).render(<App/>);
