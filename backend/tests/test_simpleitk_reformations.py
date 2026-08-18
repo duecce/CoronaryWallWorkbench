@@ -56,4 +56,4 @@ def test_inner_wall_matches_known_cylinder_radius():
     _, radii = inner_radii_from_lumen_mask(
         lumen, frames, n_theta=16, max_radius_mm=4.0, radial_step_mm=0.05
     )
-    assert np.median(radii) == np.testing.assert_allclose(np.median(radii), 2.0, atol=0.15)
+    np.testing.assert_allclose(np.median(radii), 2.0, atol=0.15)
