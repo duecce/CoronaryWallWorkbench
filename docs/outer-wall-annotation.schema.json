@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://coronarywallworkbench.local/schemas/outer-wall-annotation.schema.json",
+  "title": "CoronaryWallWorkbench Outer Wall Annotation",
+  "type": "object",
+  "required": ["schemaVersion", "caseId", "pathId", "surface", "metadata"],
+  "properties": {
+    "schemaVersion": {"type": "string", "const": "0.1.0"},
+    "caseId": {"type": "string", "minLength": 1},
+    "pathId": {"type": "string", "minLength": 1},
+    "surface": {
+      "type": "object",
+      "required": ["sMm", "thetaRad", "radiiMm"],
+      "properties": {
+        "sMm": {
+          "type": "array",
+          "items": {"type": "number"},
+          "minItems": 1
+        },
+        "thetaRad": {
+          "type": "array",
+          "items": {"type": "number"},
+          "minItems": 4
+        },
+        "radiiMm": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {"type": "number", "exclusiveMinimum": 0}
+          },
+          "minItems": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "anchors": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["sIndex", "thetaIndex", "kind"],
+        "properties": {
+          "sIndex": {"type": "integer", "minimum": 0},
+          "thetaIndex": {"type": "integer", "minimum": 0},
+          "kind": {"type": "string", "enum": ["node", "slice"]}
+        },
+        "additionalProperties": false
+      },
+      "default": []
+    },
+    "metadata": {
+      "type": "object",
+      "required": ["status"],
+      "properties": {
+        "annotationId": {"type": "string"},
+        "version": {"type": "integer", "minimum": 1},
+        "author": {"type": "string"},
+        "reviewer": {"type": ["string", "null"]},
+        "createdAt": {"type": "string", "format": "date-time"},
+        "updatedAt": {"type": "string", "format": "date-time"},
+        "status": {
+          "type": "string",
+          "enum": ["unreviewed", "annotated", "reviewed", "consensus", "locked"]
+        },
+        "confidence": {
+          "type": ["string", "null"],
+          "enum": ["high", "moderate", "uncertain", null]
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": false
+}
