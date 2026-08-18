@@ -91,8 +91,12 @@ def generate_longitudinal_reformation(image: sitk.Image, frames: ParallelTranspo
     ref.SetOrigin([0.0, -radial_extent_mm, 0.0])
     ref.SetDirection(np.eye(3).ravel().tolist())
 
+    # The displacement field is defined on the actual synthetic output grid.
+    # The final centerline sample may be closer than ds to its predecessor, so
+    # use the grid coordinate i*ds here rather than the original arc-length array.
+    grid_s = np.arange(ns, dtype=float) * ds
     out_phys = np.zeros_like(target)
-    out_phys[...,0] = frames.arc_length_mm[:,None]
+    out_phys[...,0] = grid_s[:,None]
     out_phys[...,1] = radial[None,:]
     displacement = target - out_phys
     field_arr = np.transpose(displacement, (1,0,2))[None,...]
