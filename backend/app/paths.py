@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from .case_loader import graph_points_nifti_world
+from .case_loader import graph_points_lps
 from .geometry import cumulative_arc_length
 from .models import CoronaryPath, PatientCase
 
@@ -17,13 +17,12 @@ def reconstruct_leaf_paths(case: PatientCase) -> dict[str, CoronaryPath]:
                 roots.append(node.node_id)
             elif node.parent_id in children:
                 children[node.parent_id].append(node.node_id)
-
         if not roots:
-            roots = [node.node_id for node in graph.nodes.values() if node.is_root]
+            roots = [n.node_id for n in graph.nodes.values() if n.is_root]
         if not roots:
             raise ValueError(f"No root node found for {coronary_name}")
 
-        world = graph_points_nifti_world(case, coronary_name)
+        world = graph_points_lps(case, coronary_name)
         leaves = [node_id for node_id, child_ids in children.items() if not child_ids]
         for leaf in leaves:
             chain = [leaf]
@@ -37,17 +36,15 @@ def reconstruct_leaf_paths(case: PatientCase) -> dict[str, CoronaryPath]:
                 chain.append(current)
             chain.reverse()
             xyz = np.vstack([world[node_id] for node_id in chain])
-            s = cumulative_arc_length(xyz)
             labels = [graph.labels_by_node.get(node_id) for node_id in chain]
-            label_names = [x for x in labels if x]
-            terminal = label_names[-1] if label_names else f"leaf_{leaf}"
+            terminal = next((x for x in reversed(labels) if x), f"leaf_{leaf}")
             path_id = f"{coronary_name}_{terminal}_{leaf}"
             paths[path_id] = CoronaryPath(
                 path_id=path_id,
                 coronary_name=coronary_name,
                 node_ids=chain,
                 centerline_xyz_mm=xyz,
-                arc_length_mm=s,
+                arc_length_mm=cumulative_arc_length(xyz),
                 anatomical_labels=labels,
             )
     return paths
