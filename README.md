@@ -1,151 +1,254 @@
 # CoronaryWallWorkbench
 
-CoronaryWallWorkbench is a research-oriented platform for assisted coronary wall annotation and quantitative coronary analysis from CCTA.
+Research platform for assisted coronary inner/outer-wall annotation and subsequent quantitative CCTA analysis.
 
-The first development target is a fast, reproducible **inner/outer coronary-wall annotation workflow** built around an already available and validated coronary lumen segmentation. The platform is intended to become the geometric foundation for downstream plaque, stenosis, remodeling, PCAT/FAI, and other coronary analyses.
+## Current workflow
 
-## Core inputs
+The application supports:
 
-A case is defined by three aligned inputs:
+- browser upload of a **CCTA NIfTI**, **validated lumen-mask NIfTI**, and **coronary graph XML**;
+- SimpleITK-based image I/O and physical-space processing;
+- LPS coordinates throughout the backend;
+- spatial QA between CCTA, lumen mask, and XML centerlines;
+- root-to-leaf coronary path reconstruction and XML anatomical labels;
+- parallel-transport frames along the selected path;
+- orthogonal cross-sectional CCTA reformations;
+- curved longitudinal/sCPR reformations at selectable circumferential angles;
+- lumen-derived inner-wall initialization;
+- offset-based initial outer-wall proposal;
+- equi-angular periodic-spline control nodes;
+- single-active-wall editing (`inner` or `outer`);
+- local circumferential and longitudinal propagation of edits;
+- synchronized cross-sectional and longitudinal editors;
+- navigation along the vessel from the longitudinal view;
+- hard non-crossing constraint between inner and outer wall;
+- automatic annotation persistence after every edit.
 
-- **CCTA image** (`.nii` / `.nii.gz`) containing CT intensities in HU.
-- **Coronary lumen mask** (`.nii` / `.nii.gz`) used to initialize the inner wall.
-- **Coronary graph** (`.xml`) containing centerline nodes, graph topology, physical coordinates, local radii, and optional anatomical `Labeling` information.
-
-All spatial data are handled in physical coordinates. The loader checks CCTA/mask dimensions and affines, maps XML LPS coordinates into the NIfTI RAS world coordinate convention, and verifies the centerline against the image volume and lumen mask.
-
-## Geometric model
-
-For every selected coronary path, the centerline is parameterized by arc length `s`. A parallel-transport orthonormal frame is propagated along the centerline and used to define cross-sectional planes and longitudinal reformations.
-
-Both vessel boundaries are represented in curvilinear coordinates:
+The primary geometric representation is:
 
 ```text
 r_inner(s, theta)
 r_outer(s, theta)
 ```
 
-with equi-angular control nodes in each cross-section. The initial inner wall is sampled from the validated lumen mask. The initial outer wall is generated as an offset from the inner wall.
+where `s` is arc length along the coronary path and `theta` is the angular coordinate defined by the parallel-transport frame.
 
-Control nodes are connected circumferentially and longitudinally. Interactive edits propagate smoothly to neighboring nodes with a Gaussian distance-dependent influence kernel. Explicitly edited nodes become anchors and are preserved by subsequent nearby edits.
+## Input data
 
-### Single-active-wall editing
+For each case select:
 
-Only **one wall is editable at a time**. The inactive boundary remains visible as a reference contour but its control nodes are hidden and the backend rejects edits addressed to it. This avoids accidental edits where lumen and outer-wall boundaries are close.
+1. `CCTA.nii` or `CCTA.nii.gz`
+2. `lumen_mask.nii` or `lumen_mask.nii.gz`
+3. coronary graph `.xml`
 
-A hard geometric invariant is enforced after every edit:
+When the XML contains `Labeling`, anatomical labels are included in the coronary-path selector.
 
-```text
-r_outer(s, theta) >= r_inner(s, theta) + min_separation
-```
+SimpleITK exposes NIfTI geometry in physical LPS coordinates. XML coordinates declared as LPS are therefore used directly; XML coordinates declared as RAS are converted to LPS during loading.
 
-The current default minimum separation is 0.10 mm.
+## Ubuntu installation
 
-## Implemented workflow
+Ubuntu 22.04/24.04 or equivalent is recommended.
 
-```text
-CCTA NIfTI
-    +
-Lumen mask NIfTI
-    +
-Coronary graph XML
-        |
-        v
-CaseLoader + spatial QA
-        |
-        v
-Root-to-leaf coronary path reconstruction
-        |
-        v
-Centerline resampling + parallel-transport frames
-        |
-        v
-Cross-sectional CCTA / lumen resampling
-        |
-        v
-Inner-wall radial initialization from lumen mask
-        |
-        v
-Outer-wall offset initialization
-        |
-        v
-Periodic spline wall editor
-        |
-        v
-Local circumferential + longitudinal deformation
-```
-
-## Backend API
-
-Run from `backend/`:
+### 1. Install system prerequisites
 
 ```bash
-python -m pip install -e .
-uvicorn app.main:app --reload
+sudo apt update
+sudo apt install -y git python3 python3-venv python3-pip nodejs npm
 ```
 
-Main endpoints:
-
-```text
-POST /api/cases/load
-POST /api/cases/{case_id}/paths/{path_id}/prepare
-GET  /api/cases/{case_id}/paths/{path_id}/sections/{s_index}
-POST /api/cases/{case_id}/paths/{path_id}/active-wall
-POST /api/cases/{case_id}/paths/{path_id}/edit
-```
-
-The current case registry is deliberately in-memory for the MVP. Persistent database-backed case and annotation storage will replace it later.
-
-## Frontend
-
-Run from `frontend/`:
+Check the versions:
 
 ```bash
+python3 --version
+node --version
+npm --version
+```
+
+The backend requires Python >=3.11. The frontend should be run with a modern Node.js LTS release; if the Ubuntu repository provides an older Node version, install a current LTS release before running `npm install`.
+
+### 2. Clone the repository
+
+```bash
+git clone https://github.com/duecce/CoronaryWallWorkbench.git
+cd CoronaryWallWorkbench
+```
+
+Because the repository is private, use your normal authenticated GitHub method (SSH or HTTPS token).
+
+### 3. Install the backend
+
+```bash
+cd backend
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+pip install -e .
+```
+
+This installs FastAPI, SimpleITK, NumPy, SciPy, Pydantic and multipart upload support.
+
+Start the backend:
+
+```bash
+uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+Keep this terminal open.
+
+Optional sanity check from another terminal:
+
+```bash
+curl http://127.0.0.1:8000/health
+```
+
+Expected response:
+
+```json
+{"status":"ok"}
+```
+
+### 4. Install and start the frontend
+
+In another terminal:
+
+```bash
+cd CoronaryWallWorkbench/frontend
 npm install
 npm run dev
 ```
 
-The current editor provides:
-
-- cross-sectional CCTA display;
-- simultaneous inner/outer contour visualization;
-- explicit `Edit inner wall` / `Edit outer wall` mode switching;
-- control nodes only on the active contour;
-- radial drag editing;
-- automatic local deformation of neighboring circumferential and longitudinal nodes;
-- anchor visualization;
-- section-by-section navigation.
-
-## Repository layout
+Open the URL printed by Vite, normally:
 
 ```text
-backend/
-  app/
-    case_loader.py   NIfTI/XML loading and spatial QA
-    geometry.py      centerline frames and reformations
-    paths.py         coronary graph path reconstruction
-    walls.py         radial wall model and editing
-    state.py         MVP in-memory case registry
-    main.py          FastAPI endpoints
-  tests/
-
-frontend/
-  src/
-    main.tsx         cross-sectional wall editor
-    styles.css
-
-docs/
+http://127.0.0.1:5173
 ```
 
-## Next development steps
+## How to use the application
 
-1. synchronized longitudinal/sCPR editor using the same `r(s, theta)` control grid;
-2. undo/redo and persistent annotation versioning;
-3. branch/path selector driven by XML `Labeling`;
-4. export of inner/outer surfaces as NIfTI and VTP;
-5. collaborative user/reviewer workflow;
-6. downstream plaque and PCAT/FAI modules.
+### Load a case
 
-## Status
+At the top of the page:
 
-Early development / research prototype. The software is not a medical device and is not intended for clinical use.
+1. enter a case ID, for example `ACTA20`;
+2. select the CCTA NIfTI;
+3. select the lumen-mask NIfTI;
+4. select the coronary XML;
+5. click **Load case**.
+
+The backend performs spatial QA before annotation. By default a case that fails strict alignment checks is rejected rather than silently accepted.
+
+### Select and prepare a coronary path
+
+After loading, select one of the reconstructed coronary paths. If XML `Labeling` is present, the anatomical labels are displayed in the selector.
+
+Click **Prepare path**.
+
+The backend then:
+
+1. resamples the centerline at 0.5 mm;
+2. constructs parallel-transport frames;
+3. initializes the inner wall from the validated lumen mask;
+4. initializes the outer wall 0.75 mm outside it;
+5. restores an existing saved annotation when its geometry is compatible.
+
+### Edit the walls
+
+Use:
+
+- **Edit inner wall** to expose only the inner-wall control nodes;
+- **Edit outer wall** to expose only the outer-wall control nodes.
+
+The inactive wall remains visible but cannot be edited.
+
+#### Cross-sectional view
+
+Drag a control point radially. The displacement is propagated to nearby angular and longitudinal nodes with a Gaussian kernel. The explicitly edited node becomes an anchor.
+
+#### Longitudinal view
+
+Choose the desired circumferential angle from the angle selector.
+
+The longitudinal view displays both sides of the vessel:
+
+- the selected `theta` direction on one side;
+- `theta + pi` on the opposite side.
+
+You can:
+
+- click the longitudinal image to move the synchronized cross-section;
+- drag the active wall directly in the longitudinal view;
+- switch angular direction to inspect and correct other circumferential sectors.
+
+Every longitudinal edit updates the same `r(s, theta)` surface used by the cross-sectional view.
+
+### Autosave
+
+Every successful edit is automatically written under:
+
+```text
+~/.coronarywallworkbench/cases/<CASE_ID>/annotations/
+```
+
+For each prepared path:
+
+```text
+<path>_walls.npz
+<path>_walls.json
+```
+
+The NPZ stores `s`, `theta`, inner/outer radii and anchor masks. Reloading the same case/path restores the annotation when the stored sampling geometry matches.
+
+## Default geometry parameters
+
+```text
+centerline sampling:              0.50 mm
+cross-section FOV:               10.0 mm
+cross-section pixel spacing:      0.10 mm
+angular control nodes:           16
+outer-wall initial offset:        0.75 mm
+minimum wall separation:          0.10 mm
+longitudinal radial extent:       +/- 5.0 mm
+longitudinal radial spacing:      0.10 mm
+edit propagation sigma (s):       1.5 mm
+edit propagation sigma (theta):   1.25 nodes
+```
+
+These are MVP defaults and should be refined experimentally for the final annotation protocol.
+
+## Backend API
+
+```text
+POST /api/cases/upload
+POST /api/cases/{case_id}/paths/{path_id}/prepare
+GET  /api/cases/{case_id}/paths/{path_id}/sections/{s_index}
+GET  /api/cases/{case_id}/paths/{path_id}/longitudinal/{theta_index}
+POST /api/cases/{case_id}/paths/{path_id}/active-wall
+POST /api/cases/{case_id}/paths/{path_id}/edit
+POST /api/cases/{case_id}/paths/{path_id}/save
+```
+
+Interactive FastAPI documentation is available while the backend is running at:
+
+```text
+http://127.0.0.1:8000/docs
+```
+
+## Current limitations requiring validation
+
+This is an early research prototype. Before treating the resulting annotations as a definitive reference dataset, validate at least:
+
+- CCTA/XML alignment visually on real cases;
+- curved SimpleITK longitudinal resampling against known anatomical landmarks;
+- agreement between the reconstructed radial inner wall and the original validated lumen mask;
+- behavior around bifurcations and severe centerline/mask disagreement;
+- the chosen control-node density and deformation-kernel widths.
+
+Still planned:
+
+- undo/redo and formal version history;
+- multi-user authentication and reviewer/consensus workflow;
+- export to full volumetric inner/outer-wall, plaque and PCAT masks;
+- VTP/mesh export;
+- downstream plaque, stenosis, remodeling and PCAT/FAI modules.
+
+The software is not a medical device and is not intended for clinical use.
