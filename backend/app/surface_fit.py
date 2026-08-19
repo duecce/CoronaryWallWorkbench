@@ -38,10 +38,10 @@ def solve_weighted_fourier(
     order: int,
 ) -> np.ndarray:
     radii = np.asarray(radii_mm, dtype=float)
-    w = np.clip(np.asarray(weights, dtype=float), 1e-8, None)
+    w = np.clip(np.asarray(weights, dtype=float), 1e-6, None)
     lhs = design.T @ (w[:, None] * design)
     lhs += float(spectral_lambda) * np.diag(spectral_diagonal(order))
-    lhs += np.eye(lhs.shape[0]) * 1e-9
+    lhs += np.eye(lhs.shape[0]) * 1e-8
     rhs = design.T @ (w * radii)
     return np.linalg.solve(lhs, rhs)
 
@@ -82,27 +82,28 @@ def smooth_fourier_coefficients(
     knot_spacing_mm: float,
     longitudinal_lambda: float,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Represent every angular Fourier coefficient by a cubic B-spline in s."""
+    """Represent every Fourier coefficient by a cubic longitudinal B-spline."""
 
     raw = np.asarray(raw_coefficients, dtype=float)
-    weights = np.clip(np.asarray(slice_weights, dtype=float), 1e-5, None)
+    weights = np.clip(np.asarray(slice_weights, dtype=float), 1e-4, None)
     basis, knots = clamped_bspline_basis(s_mm, knot_spacing_mm, degree=3)
     n_control = basis.shape[1]
-    second_difference = (
+    difference = (
         np.diff(np.eye(n_control), n=2, axis=0)
         if n_control >= 3
         else np.zeros((0, n_control), dtype=float)
     )
-
     controls = np.empty((raw.shape[1], n_control), dtype=float)
     smooth = np.empty_like(raw)
     for column in range(raw.shape[1]):
         harmonic = 0 if column == 0 else (column + 1) // 2
-        penalty = float(longitudinal_lambda) * (1.0 + 0.08 * harmonic**2)
+        penalty_scale = float(longitudinal_lambda) * (
+            1.0 + 0.08 * harmonic**2
+        )
         lhs = basis.T @ (weights[:, None] * basis)
-        if second_difference.size:
-            lhs += penalty * (second_difference.T @ second_difference)
-        lhs += np.eye(n_control) * 1e-9
+        if difference.size:
+            lhs += penalty_scale * (difference.T @ difference)
+        lhs += np.eye(n_control) * 1e-8
         rhs = basis.T @ (weights * raw[:, column])
         controls[column] = np.linalg.solve(lhs, rhs)
         smooth[:, column] = basis @ controls[column]
@@ -118,7 +119,7 @@ def _apply_manual_anchors(
     *,
     anchor_weight: float,
 ) -> None:
-    """Apply manual nodes with the same local angular weighting used by the desktop tool."""
+    """Apply manual nodes using the desktop tool's angular anchor kernel."""
 
     angular_step = 2.0 * np.pi / len(theta_rad)
     for s_index, theta_index in np.argwhere(anchor_mask):
@@ -128,12 +129,12 @@ def _apply_manual_anchors(
         delta = np.angle(
             np.exp(1j * (theta_rad - float(theta_rad[theta_index])))
         )
-        affected = np.flatnonzero(np.abs(delta) <= 2.5 * angular_step)
-        for index in affected:
-            local_weight = np.exp(-0.5 * (delta[index] / angular_step) ** 2)
+        for index in np.flatnonzero(np.abs(delta) <= 2.5 * angular_step):
+            angular_weight = np.exp(-0.5 * (delta[index] / angular_step) ** 2)
             targets[s_index, index] = radius
             weights[s_index, index] = max(
-                weights[s_index, index], float(anchor_weight) * local_weight
+                weights[s_index, index],
+                float(anchor_weight) * angular_weight,
             )
 
 
@@ -149,18 +150,12 @@ def fit_fourier_bspline_surface(
     longitudinal_knot_spacing_mm: float,
     longitudinal_lambda: float,
     baseline_weight: float = 0.05,
-    anchor_weight: float = 500.0,
+    anchor_weight: float = 45.0,
     lower_bound_mm: np.ndarray | float | None = None,
     upper_bound_mm: np.ndarray | float | None = None,
     containment_iterations: int = 4,
 ) -> SurfaceFitResult:
-    """Fit a smooth Fourier x longitudinal-B-spline radial wall surface.
-
-    The reference radii provide the baseline surface. Explicit user edits are
-    stored as manual anchors and injected with a very high local angular weight.
-    This produces the progressive neighboring displacement of the desktop tool
-    while keeping the final representation globally smooth and reproducible.
-    """
+    """Fit the shared Fourier circumferential / B-spline longitudinal surface."""
 
     reference = np.asarray(reference_radii_mm, dtype=float)
     theta = np.asarray(theta_rad, dtype=float)
@@ -216,7 +211,7 @@ def fit_fourier_bspline_surface(
                 spectral_lambda,
                 order,
             )
-        slice_weights = np.clip(np.mean(fitting_weights, axis=1), baseline_weight, None)
+        slice_weights = np.clip(np.mean(fitting_weights, axis=1), 0.04, None)
         smooth, controls, knots = smooth_fourier_coefficients(
             raw,
             slice_weights,
@@ -225,13 +220,22 @@ def fit_fourier_bspline_surface(
             longitudinal_lambda,
         )
         radii = smooth @ design.T
-        low = radii < lower
-        high = radii > upper
-        if not np.any(low | high):
+        maximum_violation = float(
+            max(
+                np.max(np.clip(lower - radii, 0.0, None)),
+                np.max(np.clip(radii - upper, 0.0, None)),
+            )
+        )
+        if maximum_violation < 0.005:
             break
         if iteration + 1 < containment_iterations:
+            low = radii < lower
+            high = radii > upper
+            violation = low | high
             targets = np.where(low, lower, np.where(high, upper, candidates))
-            fitting_weights = base_weights + (low | high) * (20.0 * (2.5**iteration))
+            fitting_weights = base_weights + violation * (
+                20.0 * (2.5**iteration)
+            )
 
     radii = np.clip(radii, lower, upper)
     return SurfaceFitResult(
