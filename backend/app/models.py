@@ -76,6 +76,8 @@ class PatientCase:
 
 @dataclass(slots=True)
 class ParallelTransportFrames:
+    """Rotation-minimizing orthonormal frame sampled along a centerline."""
+
     centerline_xyz_mm: np.ndarray
     arc_length_mm: np.ndarray
     tangent: np.ndarray
@@ -89,10 +91,21 @@ class WallSurface:
     theta_rad: np.ndarray
     inner_radii_mm: np.ndarray
     outer_radii_mm: np.ndarray
+    inner_reference_radii_mm: np.ndarray
+    outer_reference_radii_mm: np.ndarray
     inner_anchors: np.ndarray
     outer_anchors: np.ndarray
+    inner_anchor_values_mm: np.ndarray
+    outer_anchor_values_mm: np.ndarray
+    inner_fourier_coefficients: np.ndarray
+    outer_fourier_coefficients: np.ndarray
     active_wall: Literal["inner", "outer"] = "outer"
     min_separation_mm: float = 0.10
+    fourier_order: int = 8
+    spectral_lambda: float = 0.020
+    longitudinal_knot_spacing_mm: float = 1.00
+    longitudinal_lambda: float = 12.0
+    anchor_weight: float = 45.0
 
 
 @dataclass(slots=True)
@@ -102,5 +115,5 @@ class PreparedPath:
     surface: WallSurface
     cross_section_size_mm: float
     cross_section_spacing_mm: float
-    longitudinal_radial_extent_mm: float = 5.0
+    longitudinal_radial_extent_mm: float = 7.5
     longitudinal_radial_spacing_mm: float = 0.10
