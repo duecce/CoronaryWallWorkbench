@@ -39,35 +39,112 @@ class CaseRegistry:
         safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in path_id)
         return loaded.case.case_dir / f"{safe}_walls.npz"
 
-    def prepare_path(self, case_id: str, path_id: str, *, centerline_step_mm: float=0.5, cross_section_size_mm: float=10.0, cross_section_spacing_mm: float=0.10, n_theta: int=16, outer_offset_mm: float=0.75, longitudinal_radial_extent_mm: float=5.0, longitudinal_radial_spacing_mm: float=0.10) -> PreparedPath:
+    def prepare_path(
+        self,
+        case_id: str,
+        path_id: str,
+        *,
+        centerline_step_mm: float = 0.5,
+        cross_section_size_mm: float = 15.0,
+        cross_section_spacing_mm: float = 0.10,
+        n_theta: int = 96,
+        outer_offset_mm: float = 0.75,
+        longitudinal_radial_extent_mm: float = 7.5,
+        longitudinal_radial_spacing_mm: float = 0.10,
+    ) -> PreparedPath:
         loaded = self.get(case_id)
         if path_id not in loaded.paths:
             raise KeyError(f"Unknown path_id: {path_id}")
         path = loaded.paths[path_id]
         frames = prepare_frames(path, step_mm=centerline_step_mm)
-        surface = initialize_wall_surface(loaded.case.lumen_mask.image, frames, n_theta=n_theta, outer_offset_mm=outer_offset_mm)
-        prepared = PreparedPath(path, frames, surface, cross_section_size_mm, cross_section_spacing_mm, longitudinal_radial_extent_mm, longitudinal_radial_spacing_mm)
+        surface = initialize_wall_surface(
+            loaded.case.lumen_mask.image,
+            frames,
+            n_theta=n_theta,
+            outer_offset_mm=outer_offset_mm,
+        )
+        prepared = PreparedPath(
+            path=path,
+            frames=frames,
+            surface=surface,
+            cross_section_size_mm=cross_section_size_mm,
+            cross_section_spacing_mm=cross_section_spacing_mm,
+            longitudinal_radial_extent_mm=longitudinal_radial_extent_mm,
+            longitudinal_radial_spacing_mm=longitudinal_radial_spacing_mm,
+        )
+
         saved = self.annotation_path(case_id, path_id)
         if saved.exists():
-            d = np.load(saved, allow_pickle=False)
-            if d["inner_radii_mm"].shape == surface.inner_radii_mm.shape and np.allclose(d["s_mm"], surface.s_mm) and np.allclose(d["theta_rad"], surface.theta_rad):
-                surface.inner_radii_mm[:] = d["inner_radii_mm"]
-                surface.outer_radii_mm[:] = d["outer_radii_mm"]
-                surface.inner_anchors[:] = d["inner_anchors"].astype(bool)
-                surface.outer_anchors[:] = d["outer_anchors"].astype(bool)
+            data = np.load(saved, allow_pickle=False)
+            compatible = (
+                "s_mm" in data
+                and "theta_rad" in data
+                and data["inner_radii_mm"].shape == surface.inner_radii_mm.shape
+                and np.allclose(data["s_mm"], surface.s_mm)
+                and np.allclose(data["theta_rad"], surface.theta_rad)
+            )
+            if compatible:
+                surface.inner_radii_mm[:] = data["inner_radii_mm"]
+                surface.outer_radii_mm[:] = data["outer_radii_mm"]
+                surface.inner_anchors[:] = data["inner_anchors"].astype(bool)
+                surface.outer_anchors[:] = data["outer_anchors"].astype(bool)
+                if "inner_anchor_values_mm" in data:
+                    surface.inner_anchor_values_mm[:] = data["inner_anchor_values_mm"]
+                    surface.outer_anchor_values_mm[:] = data["outer_anchor_values_mm"]
+                else:
+                    # Backward compatibility with pre-Fourier/B-spline saves.
+                    surface.inner_anchor_values_mm[surface.inner_anchors] = surface.inner_radii_mm[surface.inner_anchors]
+                    surface.outer_anchor_values_mm[surface.outer_anchors] = surface.outer_radii_mm[surface.outer_anchors]
+                if "inner_reference_radii_mm" in data:
+                    surface.inner_reference_radii_mm[:] = data["inner_reference_radii_mm"]
+                    surface.outer_reference_radii_mm[:] = data["outer_reference_radii_mm"]
+                if "inner_fourier_coefficients" in data:
+                    surface.inner_fourier_coefficients = data["inner_fourier_coefficients"].copy()
+                    surface.outer_fourier_coefficients = data["outer_fourier_coefficients"].copy()
+
         loaded.prepared_paths[path_id] = prepared
         return prepared
 
     def save_annotation(self, case_id: str, path_id: str) -> Path:
         loaded = self.get(case_id)
         prepared = loaded.prepared_paths[path_id]
-        p = self.annotation_path(case_id, path_id)
-        p.parent.mkdir(parents=True, exist_ok=True)
-        s = prepared.surface
-        np.savez_compressed(p, s_mm=s.s_mm, theta_rad=s.theta_rad, inner_radii_mm=s.inner_radii_mm, outer_radii_mm=s.outer_radii_mm, inner_anchors=s.inner_anchors.astype(np.uint8), outer_anchors=s.outer_anchors.astype(np.uint8))
-        meta = {"case_id": case_id, "path_id": path_id, "coordinate_system": "LPS", "min_separation_mm": s.min_separation_mm}
-        p.with_suffix(".json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
-        return p
+        path = self.annotation_path(case_id, path_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        surface = prepared.surface
+        np.savez_compressed(
+            path,
+            s_mm=surface.s_mm,
+            theta_rad=surface.theta_rad,
+            inner_radii_mm=surface.inner_radii_mm,
+            outer_radii_mm=surface.outer_radii_mm,
+            inner_reference_radii_mm=surface.inner_reference_radii_mm,
+            outer_reference_radii_mm=surface.outer_reference_radii_mm,
+            inner_anchors=surface.inner_anchors.astype(np.uint8),
+            outer_anchors=surface.outer_anchors.astype(np.uint8),
+            inner_anchor_values_mm=surface.inner_anchor_values_mm,
+            outer_anchor_values_mm=surface.outer_anchor_values_mm,
+            inner_fourier_coefficients=surface.inner_fourier_coefficients,
+            outer_fourier_coefficients=surface.outer_fourier_coefficients,
+        )
+        metadata = {
+            "case_id": case_id,
+            "path_id": path_id,
+            "coordinate_system": "LPS",
+            "frame": "rotation-minimizing-double-reflection",
+            "cross_section_fov_mm": prepared.cross_section_size_mm,
+            "cross_section_spacing_mm": prepared.cross_section_spacing_mm,
+            "n_theta": int(len(surface.theta_rad)),
+            "fourier_order": surface.fourier_order,
+            "spectral_lambda": surface.spectral_lambda,
+            "longitudinal_knot_spacing_mm": surface.longitudinal_knot_spacing_mm,
+            "longitudinal_lambda": surface.longitudinal_lambda,
+            "anchor_weight": surface.anchor_weight,
+            "min_separation_mm": surface.min_separation_mm,
+        }
+        path.with_suffix(".json").write_text(
+            json.dumps(metadata, indent=2), encoding="utf-8"
+        )
+        return path
 
 
 registry = CaseRegistry()
