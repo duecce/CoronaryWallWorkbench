@@ -117,3 +117,5 @@ class PreparedPath:
     cross_section_spacing_mm: float
     longitudinal_radial_extent_mm: float = 7.5
     longitudinal_radial_spacing_mm: float = 0.10
+    cross_section_cache: dict[int, dict] = field(default_factory=dict)
+    longitudinal_cache: dict[int, tuple[np.ndarray, np.ndarray]] = field(default_factory=dict)
